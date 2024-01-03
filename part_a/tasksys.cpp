@@ -117,6 +117,22 @@ void TaskSystemParallelSpawn::sync() {
  * ================================================================
  */
 
+TaskState::TaskState(){
+    mutex_ = new std::mutex();
+    finished_ = new std::condition_variable();
+    finished_mutex_ = new std::mutex();
+    runnable_ = nullptr;
+    finished_tasks_ = -1;
+    left_tasks_ = -1;
+    num_total_tasks_ = -1;
+}
+
+TaskState::~TaskState(){
+    delete mutex_;
+    delete finished_;
+    delete finished_mutex_;
+}
+
 const char* TaskSystemParallelThreadPoolSpinning::name() {
     return "Parallel + Thread Pool + Spin";
 }
@@ -128,9 +144,55 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+    state_ = new TaskState;
+    killed = false;
+    threads_pool_ = new std::thread[num_threads];
+    num_threads_ = num_threads;
+    for(int i = 0; i < num_threads; i++){
+        threads_pool_[i] = std::thread(&TaskSystemParallelThreadPoolSpinning::spinningThread, this);
+    }
 }
 
-TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {}
+TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
+    killed = true;
+    for(int i = 0; i < num_threads_; i++){
+        threads_pool_[i].join();
+    }
+    delete[] threads_pool_;
+    delete state_;
+}
+
+void TaskSystemParallelThreadPoolSpinning::spinningThread(){
+    int id;
+    int total;
+    while(true){
+        if(killed) break;
+
+        state_ -> mutex_ -> lock();
+        total = state_ -> num_total_tasks_;
+        id = state_ -> num_total_tasks_ - state_ -> left_tasks_;
+        if (id < total)
+            state_ -> left_tasks_ --;
+        state_ -> mutex_ -> unlock();
+
+        if (id < total){
+            state_ -> runnable_ -> runTask(id, total);
+
+            state_ -> mutex_ -> lock();
+            state_ -> finished_tasks_ ++;
+            if(state_ -> finished_tasks_ == total){
+                state_ -> mutex_ -> unlock();
+
+                state_ -> finished_mutex_ -> lock();
+                state_ -> finished_mutex_ -> unlock();
+                state_ -> finished_ -> notify_all();
+            } else {
+                state_ -> mutex_ -> unlock();
+            }
+        }
+
+    }
+}
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
 
@@ -140,10 +202,17 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
     // method in Part A.  The implementation provided below runs all
     // tasks sequentially on the calling thread.
     //
+    std::unique_lock<std::mutex> lk(*(state_ -> finished_mutex_));
 
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
-    }
+    state_ -> mutex_ -> lock();
+    state_ -> finished_tasks_ = 0;
+    state_ -> left_tasks_ = num_total_tasks;
+    state_ -> num_total_tasks_  = num_total_tasks;
+    state_ -> runnable_ = runnable;
+    state_ -> mutex_ -> unlock();
+
+    state_ -> finished_ -> wait(lk);
+    lk.unlock();
 }
 
 TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,

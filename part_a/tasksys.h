@@ -4,6 +4,7 @@
 #include "itasksys.h"
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -48,11 +49,30 @@ class TaskSystemParallelSpawn: public ITaskSystem {
  * thread pool. See definition of ITaskSystem in itasksys.h for
  * documentation of the ITaskSystem interface.
  */
+class TaskState {
+    public:
+        std::mutex* mutex_;
+        std::condition_variable* finished_;
+        std::mutex* finished_mutex_;
+        IRunnable* runnable_;
+        int finished_tasks_;
+        int left_tasks_;
+        int num_total_tasks_;
+        TaskState();
+        ~TaskState();
+};
+
 class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
+    private:
+        TaskState* state_;
+        std::thread* threads_pool_;
+        bool killed;
+        int num_threads_;
     public:
         TaskSystemParallelThreadPoolSpinning(int num_threads);
         ~TaskSystemParallelThreadPoolSpinning();
         const char* name();
+        void spinningThread();
         void run(IRunnable* runnable, int num_total_tasks);
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
